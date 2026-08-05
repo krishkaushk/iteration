@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# Firebase config (contains API keys — this repo is public)
+GoogleService-Info.plist
+
+# Personal working notes — not meant for the public repo
+HANDOFF.md
