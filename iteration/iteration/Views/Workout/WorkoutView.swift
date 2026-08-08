@@ -11,6 +11,7 @@ struct WorkoutView: View {
     @State private var keyboardDismissTrigger = 0
     @State private var keyboardCancelTrigger = 0
     @State private var manualExpansionOverrides: [String: Bool] = [:]
+    @State private var focusedWeightFieldIDs: Set<String> = []
 
     private var hasPendingCompletion: Bool {
         guard let session = workoutVM.currentSession else { return false }
@@ -43,13 +44,19 @@ struct WorkoutView: View {
                 // decimalPad/numberPad have no Return key, so there's otherwise no other
                 // way to signal "done typing" — one Done button, shared by every field.
                 ToolbarItemGroup(placement: .keyboard) {
+                    // Each Button must stay a direct child of the ToolbarItemGroup — the
+                    // system gives each one its own separate pill/circle background only
+                    // at this level. Wrapping them in a container (HStack) merges both
+                    // into a single shared background instead of two detached buttons,
+                    // and padding on a Button directly stretches its own pill rather than
+                    // just repositioning the label. Leave both bare; the default spacing
+                    // above the keyboard already reads as a clear, detached gap.
                     Button {
                         keyboardCancelTrigger += 1
                     } label: {
                         Image(systemName: "xmark")
                     }
                     .tint(Color.appMuted)
-                    .padding(.bottom, 6)
 
                     Spacer()
 
@@ -60,7 +67,6 @@ struct WorkoutView: View {
                             .fontWeight(hasPendingCompletion ? .bold : .regular)
                     }
                     .tint(hasPendingCompletion ? Color.appAccent : Color.appMuted)
-                    .padding(.bottom, 6)
                 }
             }
             .sheet(isPresented: $showExercisePicker) {
@@ -292,6 +298,9 @@ struct WorkoutView: View {
 
     private func setRow(_ exerciseSet: ExerciseSet, exerciseIndex: Int, setIndex: Int) -> some View {
         let isSkeleton = exerciseSet.reps == 0 && !exerciseSet.isCompleted
+        // Grey out the carried-over weight number only until this specific field has
+        // been tapped into at least once — tapping "confirms" it even before typing.
+        let weightUntouched = isSkeleton && !focusedWeightFieldIDs.contains(exerciseSet.id)
 
         return HStack(spacing: 0) {
             Text("\(exerciseSet.setNumber)")
@@ -311,11 +320,14 @@ struct WorkoutView: View {
                     },
                     set: { workoutVM.updateSet(exerciseIndex: exerciseIndex, setIndex: setIndex, weight: $0, reps: exerciseSet.reps) }
                 ),
+                onFocusGained: {
+                    focusedWeightFieldIDs.insert(exerciseSet.id)
+                },
                 dismissTrigger: keyboardDismissTrigger,
                 cancelTrigger: keyboardCancelTrigger
             )
             .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(Color.appText)
+            .foregroundStyle(weightUntouched ? Color.appMuted : Color.appText)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity)
             .background(isSkeleton ? Color.clear : Color.appBackground)

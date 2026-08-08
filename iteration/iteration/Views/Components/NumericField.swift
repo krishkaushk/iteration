@@ -5,6 +5,7 @@ struct NumericField: View {
     @Binding var value: Double
     var allowDecimal: Bool = true
     var onCommit: (() -> Void)? = nil
+    var onFocusGained: (() -> Void)? = nil
     var dismissTrigger: Int = 0
     var cancelTrigger: Int = 0
 
@@ -32,6 +33,7 @@ struct NumericField: View {
             .onChange(of: isFocused) { _, focused in
                 if focused {
                     valueBeforeEditing = value
+                    onFocusGained?()
                 }
                 text = value == 0 ? "" : formatValue(value)
                 if !focused {
