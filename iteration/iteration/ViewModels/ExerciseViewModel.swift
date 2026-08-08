@@ -15,13 +15,19 @@ final class ExerciseViewModel {
         systemExercises + customExercises
     }
 
+    var exercisesByCategory: [String: [Exercise]] {
+        Dictionary(grouping: allExercises, by: \.category)
+    }
+
+    /// `selectedCategory` scopes results only while `searchText` is empty — typing a
+    /// search query always searches across every category, overriding whichever box
+    /// (if any) is currently drilled into.
     var filteredExercises: [Exercise] {
         var results = allExercises
 
         if !searchText.isEmpty {
             results = results.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
-        }
-        if let category = selectedCategory {
+        } else if let category = selectedCategory {
             results = results.filter { $0.category == category }
         }
         if let equipment = selectedEquipmentType {

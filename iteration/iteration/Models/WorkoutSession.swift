@@ -29,5 +29,6 @@ struct ExerciseSet: Codable, Identifiable {
     var isCompleted: Bool
     var rpe: Double?
     var notes: String?
+    var restSeconds: Int?
     var createdAt: Date
 }

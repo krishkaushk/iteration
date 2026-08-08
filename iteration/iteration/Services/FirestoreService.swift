@@ -24,8 +24,9 @@ final class FirestoreService {
         return snapshot.documents.compactMap { try? $0.data(as: Gym.self) }
     }
 
-    func addGym(_ gym: Gym) async throws {
-        try userDoc().collection("gyms").addDocument(from: gym)
+    func addGym(_ gym: Gym) async throws -> String {
+        let ref = try userDoc().collection("gyms").addDocument(from: gym)
+        return ref.documentID
     }
 
     func deleteGym(_ gymId: String) async throws {
@@ -60,11 +61,11 @@ final class FirestoreService {
         try userDoc().collection("workoutSessions").addDocument(from: session)
     }
 
-    func fetchWorkouts(limit: Int = 20) async throws -> [WorkoutSession] {
+    func fetchWorkouts(limit: Int = 20, source: FirestoreSource = .default) async throws -> [WorkoutSession] {
         let snapshot = try await userDoc().collection("workoutSessions")
             .order(by: "startedAt", descending: true)
             .limit(to: limit)
-            .getDocuments()
+            .getDocuments(source: source)
         return snapshot.documents.compactMap { try? $0.data(as: WorkoutSession.self) }
     }
 
@@ -74,11 +75,11 @@ final class FirestoreService {
         try userDoc().collection("bodyWeightLogs").addDocument(from: log)
     }
 
-    func fetchBodyWeightLogs(limit: Int = 90) async throws -> [BodyWeightLog] {
+    func fetchBodyWeightLogs(limit: Int = 90, source: FirestoreSource = .default) async throws -> [BodyWeightLog] {
         let snapshot = try await userDoc().collection("bodyWeightLogs")
             .order(by: "date", descending: true)
             .limit(to: limit)
-            .getDocuments()
+            .getDocuments(source: source)
         return snapshot.documents.compactMap { try? $0.data(as: BodyWeightLog.self) }
     }
 

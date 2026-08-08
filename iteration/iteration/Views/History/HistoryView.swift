@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseFirestore
 
 struct HistoryView: View {
     @Environment(WorkoutViewModel.self) private var workoutVM
@@ -13,7 +14,13 @@ struct HistoryView: View {
                 Color.appBackground.ignoresSafeArea()
 
                 if isLoading && workouts.isEmpty {
-                    ProgressView().tint(Color.appText)
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(0..<4, id: \.self) { _ in sessionCardPlaceholder }
+                        }
+                        .padding(20)
+                    }
+                    .redacted(reason: .placeholder)
                 } else if workouts.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "clock")
@@ -47,11 +54,43 @@ struct HistoryView: View {
     }
 
     private func loadWorkouts() async {
-        isLoading = true
+        // Cache-first paint: shows last-known data instantly instead of blocking on
+        // the server round trip, which can be slow on a cold Firestore connection.
+        if let cached = try? await FirestoreService.shared.fetchWorkouts(source: .cache),
+           !cached.isEmpty {
+            workouts = cached
+        }
+        isLoading = workouts.isEmpty
         do {
-            workouts = try await FirestoreService.shared.fetchWorkouts()
+            workouts = try await FirestoreService.shared.fetchWorkouts(source: .server)
         } catch {}
         isLoading = false
+    }
+
+    private var sessionCardPlaceholder: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color.appPrimary)
+                .frame(width: 4, height: 36)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Gym Name")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.appText)
+                Text("2 days ago · 45 min")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.appMuted)
+            }
+
+            Spacer()
+
+            Text("5 ex")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color.appMuted)
+        }
+        .padding(16)
+        .background(Color.appSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private func sessionCard(_ session: WorkoutSession) -> some View {

@@ -7,6 +7,7 @@ struct WorkoutView: View {
     @State private var showExercisePicker = false
     @State private var showGymPicker = false
     @State private var showFinishConfirm = false
+    @State private var showCancelConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -17,10 +18,6 @@ struct WorkoutView: View {
                     activeWorkoutView
                 } else {
                     startView
-                }
-
-                if workoutVM.isRestTimerActive {
-                    restTimerOverlay
                 }
             }
             .navigationTitle(workoutVM.isActive ? "Workout" : "")
@@ -94,9 +91,12 @@ struct WorkoutView: View {
                 LazyVStack(spacing: 16) {
                     ForEach(Array(workoutVM.currentSession!.exercises.enumerated()), id: \.element.id) { exIndex, exercise in
                         exerciseCard(exercise, at: exIndex)
+                            .opacity(dimAmount(for: exIndex))
+                            .saturation(dimAmount(for: exIndex))
                     }
                 }
                 .padding(20)
+                .animation(.easeInOut(duration: 0.3), value: workoutVM.isRestTimerActive)
             }
 
             bottomBar
@@ -105,8 +105,15 @@ struct WorkoutView: View {
 
     // MARK: - Exercise Card
 
+    private func dimAmount(for exIndex: Int) -> Double {
+        guard workoutVM.isRestTimerActive, workoutVM.restTimerExerciseIndex != exIndex else { return 1 }
+        return 0.4
+    }
+
     private func exerciseCard(_ exercise: WorkoutExercise, at exIndex: Int) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let isTimerHere = workoutVM.isRestTimerActive && workoutVM.restTimerExerciseIndex == exIndex
+
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(exercise.exerciseName)
                     .font(.system(size: 16, weight: .semibold))
@@ -139,6 +146,12 @@ struct WorkoutView: View {
 
             ForEach(Array(exercise.sets.enumerated()), id: \.element.id) { setIndex, exerciseSet in
                 setRow(exerciseSet, exerciseIndex: exIndex, setIndex: setIndex)
+
+                // Sits between the set that was just completed and the fresh blank
+                // set behind it — not a floating overlay competing for attention.
+                if isTimerHere && setIndex == exercise.sets.count - 2 {
+                    inlineRestTimer
+                }
             }
 
             Button {
@@ -162,7 +175,9 @@ struct WorkoutView: View {
     // MARK: - Set Row
 
     private func setRow(_ exerciseSet: ExerciseSet, exerciseIndex: Int, setIndex: Int) -> some View {
-        HStack(spacing: 0) {
+        let isSkeleton = exerciseSet.reps == 0 && !exerciseSet.isCompleted
+
+        return HStack(spacing: 0) {
             Button {
                 guard let session = workoutVM.currentSession,
                       exerciseIndex < session.exercises.count,
@@ -172,7 +187,7 @@ struct WorkoutView: View {
             } label: {
                 Text("\(exerciseSet.setNumber)")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.appDestructive)
+                    .foregroundStyle(isSkeleton ? Color.appMuted : Color.appDestructive)
                     .frame(width: 40, alignment: .leading)
             }
 
@@ -193,8 +208,13 @@ struct WorkoutView: View {
             .foregroundStyle(Color.appText)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity)
-            .background(Color.appBackground)
+            .background(isSkeleton ? Color.clear : Color.appBackground)
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.appBorder, style: StrokeStyle(lineWidth: 1, dash: [4]))
+                    .opacity(isSkeleton ? 1 : 0)
+            )
 
             Spacer().frame(width: 8)
 
@@ -216,17 +236,23 @@ struct WorkoutView: View {
             .foregroundStyle(Color.appText)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity)
-            .background(Color.appBackground)
+            .background(isSkeleton ? Color.clear : Color.appBackground)
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.appBorder, style: StrokeStyle(lineWidth: 1, dash: [4]))
+                    .opacity(isSkeleton ? 1 : 0)
+            )
 
             Button {
                 workoutVM.toggleSetComplete(exerciseIndex: exerciseIndex, setIndex: setIndex)
             } label: {
                 Image(systemName: exerciseSet.isCompleted ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 22))
-                    .foregroundStyle(exerciseSet.isCompleted ? Color.appAccent : Color.appMuted)
+                    .foregroundStyle(exerciseSet.isCompleted ? Color.appAccent : (isSkeleton ? Color.appBorder : Color.appMuted))
             }
             .frame(width: 44)
+            .disabled(isSkeleton)
         }
     }
 
@@ -234,6 +260,25 @@ struct WorkoutView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 12) {
+            Button {
+                showCancelConfirm = true
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 48, height: 48)
+                    .background(Color.appSurface)
+                    .foregroundStyle(Color.appDestructive)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .alert("Discard workout?", isPresented: $showCancelConfirm) {
+                Button("Discard", role: .destructive) {
+                    workoutVM.cancelWorkout()
+                }
+                Button("Keep Going", role: .cancel) {}
+            } message: {
+                Text("This workout hasn't been saved yet. Discarding it can't be undone.")
+            }
+
             Button {
                 showExercisePicker = true
             } label: {
@@ -272,21 +317,40 @@ struct WorkoutView: View {
         .background(Color.appSurface)
     }
 
-    // MARK: - Rest Timer Overlay
+    // MARK: - Rest Timer (inline, between the completed set and the next one)
 
-    private var restTimerOverlay: some View {
-        VStack {
-            Spacer()
+    private var inlineRestTimer: some View {
+        let startedAt = workoutVM.restTimerStartedAt ?? Date()
+        let displayDate: Date = workoutVM.restTimerMode == .countUp
+            ? startedAt
+            : startedAt.addingTimeInterval(TimeInterval(workoutVM.restTimerTargetSeconds))
+        let timedOut = workoutVM.restTimerMode == .countdown && workoutVM.restTimerDidExpire
 
+        return VStack(spacing: 12) {
             HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("REST")
-                        .font(.system(size: 11, weight: .medium))
-                        .tracking(1)
-                        .foregroundStyle(Color.appAccent)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(timedOut ? "TIME'S UP" : "REST")
+                            .font(.system(size: 11, weight: .medium))
+                            .tracking(1)
+                            .foregroundStyle(Color.appAccent)
 
-                    Text(workoutVM.restTimerFormatted)
-                        .font(.system(size: 32, weight: .medium))
+                        Button {
+                            workoutVM.restTimerMode = workoutVM.restTimerMode == .countUp ? .countdown : .countUp
+                            workoutVM.restTimerDidExpire = false
+                        } label: {
+                            Text(workoutVM.restTimerMode == .countUp ? "COUNT UP" : "COUNTDOWN")
+                                .font(.system(size: 10, weight: .semibold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.white.opacity(0.15))
+                                .foregroundStyle(.white)
+                                .clipShape(Capsule())
+                        }
+                    }
+
+                    Text(displayDate, style: .timer)
+                        .font(.system(size: 28, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(.white)
                 }
@@ -306,13 +370,35 @@ struct WorkoutView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
             }
-            .padding(20)
-            .background(Color.appCardMaroon)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal, 20)
-            .padding(.bottom, 80)
+
+            if workoutVM.restTimerMode == .countdown {
+                HStack(spacing: 16) {
+                    Button {
+                        workoutVM.restTimerTargetSeconds = max(15, workoutVM.restTimerTargetSeconds - 15)
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+
+                    Text("Target: \(workoutVM.restTimerTargetSeconds)s")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.appCardMaroonLight)
+
+                    Button {
+                        workoutVM.restTimerTargetSeconds += 15
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+            }
         }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-        .animation(.easeInOut(duration: 0.3), value: workoutVM.isRestTimerActive)
+        .padding(16)
+        .background(Color.appCardMaroon)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .sensoryFeedback(.success, trigger: workoutVM.restTimerDidExpire)
+        .transition(.scale(scale: 0.95).combined(with: .opacity))
     }
 }

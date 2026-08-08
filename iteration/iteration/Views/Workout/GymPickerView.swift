@@ -14,7 +14,12 @@ struct GymPickerView: View {
                 Color.appBackground.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    if gymVM.gyms.isEmpty {
+                    if gymVM.isLoading && gymVM.gyms.isEmpty {
+                        VStack(spacing: 0) {
+                            ForEach(0..<2, id: \.self) { _ in gymRowPlaceholder }
+                        }
+                        .redacted(reason: .placeholder)
+                    } else if gymVM.gyms.isEmpty {
                         VStack(spacing: 16) {
                             Spacer()
                             Text("No gyms yet")
@@ -74,9 +79,13 @@ struct GymPickerView: View {
                         .foregroundStyle(Color.appMuted)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showAddGym = true } label: {
-                        Image(systemName: "plus")
-                            .foregroundStyle(Color.appPrimary)
+                    if gymVM.isMutating {
+                        ProgressView().tint(Color.appMuted)
+                    } else {
+                        Button { showAddGym = true } label: {
+                            Image(systemName: "plus")
+                                .foregroundStyle(Color.appPrimary)
+                        }
                     }
                 }
             }
@@ -96,5 +105,24 @@ struct GymPickerView: View {
                 }
             }
         }
+    }
+
+    private var gymRowPlaceholder: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Gym Name")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.appText)
+                Text("Location")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.appMuted)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.appMuted)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
     }
 }

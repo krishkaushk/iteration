@@ -11,26 +11,10 @@ struct ExerciseListView: View {
 
                 if exerciseVM.isLoading && exerciseVM.allExercises.isEmpty {
                     ProgressView().tint(Color.appText)
+                } else if !exerciseVM.searchText.isEmpty {
+                    searchResultsList
                 } else {
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            categoryFilter
-                                .padding(.horizontal, 20)
-                                .padding(.top, 8)
-
-                            equipmentFilter
-                                .padding(.horizontal, 20)
-                                .padding(.top, 10)
-
-                            LazyVStack(spacing: 0) {
-                                ForEach(exerciseVM.filteredExercises) { exercise in
-                                    exerciseRow(exercise)
-                                }
-                            }
-                            .padding(.top, 12)
-                        }
-                        .padding(.bottom, 20)
-                    }
+                    categoryBoxGrid
                 }
             }
             .navigationTitle("Exercises")
@@ -48,27 +32,87 @@ struct ExerciseListView: View {
             .sheet(isPresented: $showAddExercise) {
                 AddExerciseView(exerciseVM: exerciseVM)
             }
+            .navigationDestination(for: String.self) { category in
+                categoryDetail(category)
+            }
             .task {
                 await exerciseVM.seedIfNeeded()
             }
         }
     }
 
-    // MARK: - Category Filter
+    // MARK: - Category Box Grid (landing state)
 
-    private var categoryFilter: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                filterChip("All", isSelected: exerciseVM.selectedCategory == nil) {
-                    exerciseVM.selectedCategory = nil
-                }
+    private var categoryColumns: [GridItem] {
+        [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    }
+
+    private var categoryBoxGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: categoryColumns, spacing: 12) {
                 ForEach(Exercise.Category.allCases, id: \.rawValue) { category in
-                    filterChip(category.rawValue.capitalized,
-                              isSelected: exerciseVM.selectedCategory == category.rawValue) {
-                        exerciseVM.selectedCategory = category.rawValue
+                    NavigationLink(value: category.rawValue) {
+                        categoryBox(category)
                     }
                 }
             }
+            .padding(20)
+        }
+    }
+
+    private func categoryBox(_ category: Exercise.Category) -> some View {
+        let count = exerciseVM.exercisesByCategory[category.rawValue]?.count ?? 0
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(category.rawValue.capitalized)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(Color.appText)
+            Text("\(count) exercises")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.appMuted)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .frame(height: 90)
+        .background(Color.appSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - Category Detail (drilled into a box)
+
+    private func categoryDetail(_ category: String) -> some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                equipmentFilter
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+
+                LazyVStack(spacing: 0) {
+                    ForEach(exerciseVM.filteredExercises) { exercise in
+                        exerciseRow(exercise)
+                    }
+                }
+                .padding(.top, 12)
+            }
+            .padding(.bottom, 20)
+        }
+        .navigationTitle(category.capitalized)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .onAppear { exerciseVM.selectedCategory = category }
+        .onDisappear { exerciseVM.selectedCategory = nil }
+    }
+
+    // MARK: - Search Results (global, ignores box grouping)
+
+    private var searchResultsList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(exerciseVM.filteredExercises) { exercise in
+                    exerciseRow(exercise)
+                }
+            }
+            .padding(.top, 12)
+            .padding(.bottom, 20)
         }
     }
 

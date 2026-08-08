@@ -33,7 +33,7 @@ Default weight unit: **lbs**. A kg toggle is planned (Phase 5) but not yet built
 
 These rules apply to every file in this project. Violating them causes build failures.
 
-- **No UIKit**: `import UIKit` is unavailable. No `UITabBarAppearance`, `UIColor`, `UIKeyboardType`, `UITabBar`.
+- **No UIKit**: `import UIKit` is unavailable. No `UITabBarAppearance`, `UIColor`, `UITabBar`. (`.keyboardType(_:)` is fine despite taking a `UIKeyboardType` — confirmed it compiles without an explicit UIKit import, e.g. `NumericField.swift`; the earlier blanket claim that `UIKeyboardType` itself was unavailable was wrong.)
 - **No `textInputAutocapitalization`**: removed in iOS 26.
 - **No `Group { if ... }` conditional content in overlays**: causes TableColumn type-inference failure. Use plain `if/else` with full modifier chains on each branch.
 - **Long chained collection operations time out the type checker**. Always break into explicitly typed intermediate `let` bindings:
@@ -166,6 +166,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
     match /systemExercises/{id} {
       allow read: if request.auth != null;
+      allow write: if request.auth != null;
     }
     match /users/{userId}/{document=**} {
       allow read, write: if request.auth.uid == userId;

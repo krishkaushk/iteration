@@ -36,14 +36,24 @@ struct ProfileView: View {
 
                                 Spacer()
 
-                                Button { showAddGym = true } label: {
-                                    Image(systemName: "plus")
-                                        .font(.system(size: 14))
-                                        .foregroundStyle(Color.appPrimary)
+                                if gymVM.isMutating {
+                                    ProgressView().tint(Color.appMuted)
+                                } else {
+                                    Button { showAddGym = true } label: {
+                                        Image(systemName: "plus")
+                                            .font(.system(size: 14))
+                                            .foregroundStyle(Color.appPrimary)
+                                    }
                                 }
                             }
 
-                            if gymVM.gyms.isEmpty {
+                            if gymVM.isLoading && gymVM.gyms.isEmpty {
+                                VStack(spacing: 8) {
+                                    gymRowPlaceholder
+                                    gymRowPlaceholder
+                                }
+                                .redacted(reason: .placeholder)
+                            } else if gymVM.gyms.isEmpty {
                                 Text("No gyms added yet")
                                     .font(.system(size: 14))
                                     .foregroundStyle(Color.appMuted)
@@ -74,6 +84,7 @@ struct ProfileView: View {
                                                 .font(.system(size: 14))
                                                 .foregroundStyle(Color.appDestructive)
                                         }
+                                        .disabled(gymVM.isMutating)
                                     }
                                     .padding(14)
                                     .background(Color.appSurface)
@@ -157,5 +168,25 @@ struct ProfileView: View {
                 }
             }
         }
+    }
+
+    private var gymRowPlaceholder: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Gym Name")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.appText)
+                Text("Location")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.appMuted)
+            }
+            Spacer()
+            Image(systemName: "trash")
+                .font(.system(size: 14))
+                .foregroundStyle(Color.appDestructive)
+        }
+        .padding(14)
+        .background(Color.appSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import FirebaseFirestore
 
 struct StrengthPoint: Identifiable {
     var id = UUID()
@@ -73,11 +74,31 @@ final class ProgressViewModel {
         bodyWeightLogs.reversed()
     }
 
+    var averageRestSeconds: Int? {
+        let allSets: [ExerciseSet] = workouts.flatMap { $0.exercises }.flatMap { $0.sets }
+        let restValues: [Int] = allSets.compactMap { $0.restSeconds }
+        guard !restValues.isEmpty else { return nil }
+        return restValues.reduce(0, +) / restValues.count
+    }
+
     func load() async {
-        isLoading = true
+        // Cache-first paint: shows last-known data instantly instead of blocking on
+        // the server round trip, which can be slow on a cold Firestore connection.
+        async let cachedWorkouts = try? FirestoreService.shared.fetchWorkouts(limit: 200, source: .cache)
+        async let cachedLogs = try? FirestoreService.shared.fetchBodyWeightLogs(source: .cache)
+        if let cachedWorkouts = await cachedWorkouts, !cachedWorkouts.isEmpty {
+            workouts = cachedWorkouts
+        }
+        if let cachedLogs = await cachedLogs, !cachedLogs.isEmpty {
+            bodyWeightLogs = cachedLogs
+        }
+        isLoading = workouts.isEmpty && bodyWeightLogs.isEmpty
+
         do {
-            workouts = try await FirestoreService.shared.fetchWorkouts(limit: 200)
-            bodyWeightLogs = try await FirestoreService.shared.fetchBodyWeightLogs()
+            async let freshWorkouts = FirestoreService.shared.fetchWorkouts(limit: 200, source: .server)
+            async let freshLogs = FirestoreService.shared.fetchBodyWeightLogs(source: .server)
+            workouts = try await freshWorkouts
+            bodyWeightLogs = try await freshLogs
             if let first = exerciseNames.first, selectedExerciseName.isEmpty {
                 selectedExerciseName = first
             }

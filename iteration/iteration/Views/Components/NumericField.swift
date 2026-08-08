@@ -12,6 +12,7 @@ struct NumericField: View {
         TextField(placeholder, text: $text)
             .focused($isFocused)
             .multilineTextAlignment(.center)
+            .keyboardType(allowDecimal ? .decimalPad : .numberPad)
             .onChange(of: text) { _, newValue in
                 let allowed: Set<Character> = allowDecimal
                     ? Set("0123456789.")

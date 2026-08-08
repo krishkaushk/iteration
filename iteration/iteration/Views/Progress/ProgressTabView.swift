@@ -9,19 +9,17 @@ struct ProgressTabView: View {
             ZStack {
                 Color.appBackground.ignoresSafeArea()
 
-                if progressVM.isLoading {
-                    ProgressView().tint(Color.appText)
-                } else {
-                    ScrollView {
-                        VStack(spacing: 20) {
-                            strengthSection
-                            volumeSection
-                            bodyWeightSection
-                        }
-                        .padding(20)
-                        .padding(.bottom, 20)
+                ScrollView {
+                    VStack(spacing: 20) {
+                        strengthSection
+                        volumeSection
+                        restSection
+                        bodyWeightSection
                     }
+                    .padding(20)
+                    .padding(.bottom, 20)
                 }
+                .redacted(reason: progressVM.isLoading ? .placeholder : [])
             }
             .navigationTitle("Progress")
             .navigationBarTitleDisplayMode(.large)
@@ -134,6 +132,30 @@ struct ProgressTabView: View {
         .padding(16)
         .background(Color.appSurface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - Rest Time
+
+    private var restSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionHeader("REST TIME", subtitle: "Average across logged sets")
+
+            if let avg = progressVM.averageRestSeconds {
+                Text(formatRestTime(avg))
+                    .font(.system(size: 34, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.appAccent)
+            } else {
+                emptyState("Complete sets with logged rest time to see this")
+            }
+        }
+        .padding(16)
+        .background(Color.appSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func formatRestTime(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
     // MARK: - Body Weight
