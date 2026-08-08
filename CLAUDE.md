@@ -17,7 +17,7 @@ Single user, personal use only. Not targeting the App Store.
 | Auth | Firebase Auth (email/password) |
 | Database | Cloud Firestore (Firebase Spark plan — free) |
 | Charts | Swift Charts (`import Charts`, built-in iOS 16+) |
-| Widget | WidgetKit (Phase 6) |
+| Widget | WidgetKit + ActivityKit — Live Activity built (`WorkoutWidgetExtension`, no App Group); home-screen widget still Phase 6 |
 | Architecture | MVVM + `@Observable` (iOS 17+ pattern) |
 | Package manager | Swift Package Manager |
 
@@ -68,9 +68,11 @@ iteration/
     WorkoutSession.swift       — WorkoutSession, WorkoutExercise, ExerciseSet
     BodyWeightLog.swift        — body weight log entries
     UserSettings.swift         — monthlyGoal (default 20)
+    WorkoutActivityAttributes.swift — ActivityAttributes/ContentState for the workout Live Activity; Firebase-free, shared with WorkoutWidgetExtension target
+    EndRestTimerIntent.swift   — LiveActivityIntent behind the Live Activity's Done button; Firebase-free, shared with WorkoutWidgetExtension target
   ViewModels/
     AuthViewModel.swift        — Firebase Auth listener, signIn/signUp/signOut
-    WorkoutViewModel.swift     — active session, rest timer, home stats
+    WorkoutViewModel.swift     — active session, rest timer, home stats, Live Activity lifecycle
     ExerciseViewModel.swift    — exercise library + search
     GymViewModel.swift         — gym CRUD
     ProgressViewModel.swift    — strength/volume/bodyweight chart data
@@ -102,6 +104,15 @@ iteration/
     FirestoreService.swift     — singleton, all Firestore reads/writes
   GoogleService-Info.plist     — Firebase config, flat in iteration/ (not under a Resources/ folder); gitignored, not committed
 ```
+
+**`WorkoutWidgetExtension` target** — separate Widget Extension target for the rest-timer/set-tracking Live Activity (Lock Screen + Dynamic Island), full path `iteration/WorkoutWidget/` (sibling to `iteration/iteration/`, not nested inside it):
+```
+iteration/WorkoutWidget/
+  WorkoutWidgetBundle.swift       — @main WidgetBundle
+  WorkoutWidgetLiveActivity.swift — Lock Screen + Dynamic Island UI (ActivityConfiguration)
+  Info.plist                      — NSExtensionPointIdentifier = com.apple.widgetkit-extension
+```
+No App Group — the Activity is driven entirely by in-process `Activity.update()` calls from `WorkoutViewModel`; the Done button's `LiveActivityIntent` runs in the app's own process and talks back to `WorkoutViewModel` via `NotificationCenter`, not shared storage. **If this target is ever deleted and recreated**: Xcode's Widget Extension wizard has defaulted to visionOS (`SDKROOT = xros`) rather than iOS in this project before, which silently breaks the `ActivityKit` import (unavailable on visionOS) — check `SUPPORTED_PLATFORMS`/`SDKROOT`/`TARGETED_DEVICE_FAMILY` in the new target's build settings before assuming a build failure is something else.
 
 `Mockups/gym_tracker_ios_mockup_gold.html` at the repo root — early design reference, not part of the Xcode project.
 
@@ -286,7 +297,8 @@ init() {
 - [x] Phase 1: Xcode project + Firebase setup + Auth screens + TabView shell
 - [x] Phase 2: Core logging — gyms, exercises, active workout, history, repeat workout, rest timer
 - [x] Phase 3: Progress charts (Swift Charts) + body weight tracking + HomeView live data
-- [ ] Phase 4: Equipment variants + weight offset normalization
+- [x] Rest timer + workout Live Activity (Lock Screen + Dynamic Island) — not one of the numbered phases below, built ahead of them as an agreed-upon interim feature
+- [ ] Phase 4: Equipment variants + weight offset normalization — deprioritized by user, don't default to suggesting this next
 - [ ] Phase 5: Polish — set notes, unit toggle (lbs/kg), offline edge cases
 - [ ] Phase 6: WidgetKit homescreen widget (App Group + shared UserDefaults)
 

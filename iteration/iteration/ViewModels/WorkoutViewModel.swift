@@ -100,7 +100,7 @@ final class WorkoutViewModel {
     var restTimerMode: RestTimerMode = .countUp {
         didSet { syncLiveActivity() }
     }
-    var restTimerTargetSeconds: Int = 90 {
+    var restTimerTargetSeconds: Int = 180 {
         didSet { syncLiveActivity() }
     }
     var restTimerExerciseIndex: Int?

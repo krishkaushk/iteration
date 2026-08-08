@@ -6,25 +6,19 @@ struct NumericField: View {
     var allowDecimal: Bool = true
     var onCommit: (() -> Void)? = nil
     var dismissTrigger: Int = 0
+    var cancelTrigger: Int = 0
 
     @State private var text: String = ""
     @FocusState private var isFocused: Bool
+    @State private var valueBeforeEditing: Double = 0
+    @State private var isCancelling = false
 
     var body: some View {
         TextField(placeholder, text: $text)
             .focused($isFocused)
             .multilineTextAlignment(.center)
             .keyboardType(allowDecimal ? .decimalPad : .numberPad)
-            .toolbar {
-                // decimalPad/numberPad have no Return key, so there's otherwise no way
-                // to signal "done typing" — this is what lets onCommit ever fire.
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") {
-                        isFocused = false
-                    }
-                }
-            }
+            .autocorrectionDisabled(true)
             .onChange(of: text) { _, newValue in
                 let allowed: Set<Character> = allowDecimal
                     ? Set("0123456789.")
@@ -36,15 +30,27 @@ struct NumericField: View {
                 value = Double(filtered) ?? 0
             }
             .onChange(of: isFocused) { _, focused in
+                if focused {
+                    valueBeforeEditing = value
+                }
                 text = value == 0 ? "" : formatValue(value)
                 if !focused {
-                    onCommit?()
+                    if !isCancelling {
+                        onCommit?()
+                    }
+                    isCancelling = false
                 }
             }
             .onAppear {
                 text = value == 0 ? "" : formatValue(value)
             }
             .onChange(of: dismissTrigger) { _, _ in
+                isFocused = false
+            }
+            .onChange(of: cancelTrigger) { _, _ in
+                guard isFocused else { return }
+                isCancelling = true
+                value = valueBeforeEditing
                 isFocused = false
             }
     }

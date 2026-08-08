@@ -37,7 +37,7 @@ struct HomeView: View {
                 .font(.system(size: 26, weight: .medium))
                 .foregroundStyle(Color.appText)
         }
-        .padding(.top, 16)
+        .padding(.top, workoutVM.isActive ? 28 : 16)
     }
 
     // MARK: - Session Card

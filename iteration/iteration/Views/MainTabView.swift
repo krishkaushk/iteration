@@ -67,6 +67,7 @@ struct MainTabView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .padding(.horizontal, 12)
             .padding(.top, 4)
+            .padding(.bottom, 8)
         }
         .buttonStyle(.plain)
     }
