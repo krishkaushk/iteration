@@ -8,6 +8,7 @@ struct WorkoutView: View {
     @State private var showGymPicker = false
     @State private var showFinishConfirm = false
     @State private var showCancelConfirm = false
+    @State private var keyboardDismissTrigger = 0
 
     var body: some View {
         NavigationStack {
@@ -97,7 +98,12 @@ struct WorkoutView: View {
                 }
                 .padding(20)
                 .animation(.easeInOut(duration: 0.3), value: workoutVM.isRestTimerActive)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    keyboardDismissTrigger += 1
+                }
             }
+            .scrollDismissesKeyboard(.immediately)
 
             bottomBar
         }
@@ -139,6 +145,8 @@ struct WorkoutView: View {
                     .frame(maxWidth: .infinity)
                 Text("")
                     .frame(width: 44)
+                Text("")
+                    .frame(width: 28)
             }
             .font(.system(size: 11, weight: .medium))
             .tracking(0.6)
@@ -178,18 +186,10 @@ struct WorkoutView: View {
         let isSkeleton = exerciseSet.reps == 0 && !exerciseSet.isCompleted
 
         return HStack(spacing: 0) {
-            Button {
-                guard let session = workoutVM.currentSession,
-                      exerciseIndex < session.exercises.count,
-                      setIndex < session.exercises[exerciseIndex].sets.count
-                else { return }
-                workoutVM.removeSet(exerciseIndex: exerciseIndex, setIndex: setIndex)
-            } label: {
-                Text("\(exerciseSet.setNumber)")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(isSkeleton ? Color.appMuted : Color.appDestructive)
-                    .frame(width: 40, alignment: .leading)
-            }
+            Text("\(exerciseSet.setNumber)")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isSkeleton ? Color.appMuted : Color.appText)
+                .frame(width: 40, alignment: .leading)
 
             NumericField(
                 placeholder: "0",
@@ -202,7 +202,8 @@ struct WorkoutView: View {
                         return session.exercises[exerciseIndex].sets[setIndex].weight
                     },
                     set: { workoutVM.updateSet(exerciseIndex: exerciseIndex, setIndex: setIndex, weight: $0, reps: exerciseSet.reps) }
-                )
+                ),
+                dismissTrigger: keyboardDismissTrigger
             )
             .font(.system(size: 16, weight: .medium))
             .foregroundStyle(Color.appText)
@@ -230,7 +231,11 @@ struct WorkoutView: View {
                     },
                     set: { workoutVM.updateSet(exerciseIndex: exerciseIndex, setIndex: setIndex, weight: exerciseSet.weight, reps: Int($0)) }
                 ),
-                allowDecimal: false
+                allowDecimal: false,
+                onCommit: {
+                    workoutVM.completeSetIfReady(exerciseIndex: exerciseIndex, setIndex: setIndex)
+                },
+                dismissTrigger: keyboardDismissTrigger
             )
             .font(.system(size: 16, weight: .medium))
             .foregroundStyle(Color.appText)
@@ -253,6 +258,19 @@ struct WorkoutView: View {
             }
             .frame(width: 44)
             .disabled(isSkeleton)
+
+            Button {
+                guard let session = workoutVM.currentSession,
+                      exerciseIndex < session.exercises.count,
+                      setIndex < session.exercises[exerciseIndex].sets.count
+                else { return }
+                workoutVM.removeSet(exerciseIndex: exerciseIndex, setIndex: setIndex)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.appMuted)
+            }
+            .frame(width: 28)
         }
     }
 

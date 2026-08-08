@@ -1,6 +1,7 @@
 import SwiftUI
 import Observation
 import FirebaseFirestore
+import ActivityKit
 
 @Observable
 final class WorkoutViewModel {
@@ -96,12 +97,26 @@ final class WorkoutViewModel {
     }
     var isRestTimerActive: Bool = false
     var restTimerStartedAt: Date?
-    var restTimerMode: RestTimerMode = .countUp
-    var restTimerTargetSeconds: Int = 90
+    var restTimerMode: RestTimerMode = .countUp {
+        didSet { syncLiveActivity() }
+    }
+    var restTimerTargetSeconds: Int = 90 {
+        didSet { syncLiveActivity() }
+    }
     var restTimerExerciseIndex: Int?
     var restTimerSetIndex: Int?
     var restTimerDidExpire: Bool = false
     private var expiryTask: Task<Void, Never>?
+    private var workoutActivity: Activity<WorkoutActivityAttributes>?
+
+    init() {
+        endOrphanedLiveActivities()
+        NotificationCenter.default.addObserver(
+            forName: .restTimerDismissedFromLiveActivity, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.dismissRestTimer()
+        }
+    }
 
     func startWorkout(gym: Gym? = nil) {
         currentSession = WorkoutSession(
@@ -111,6 +126,7 @@ final class WorkoutViewModel {
             exercises: []
         )
         selectedGym = gym
+        startWorkoutLiveActivity()
     }
 
     func repeatWorkout(from session: WorkoutSession) {
@@ -151,6 +167,7 @@ final class WorkoutViewModel {
             startedAt: Date(),
             exercises: newExercises
         )
+        startWorkoutLiveActivity()
     }
 
     func addExercise(_ exercise: Exercise) {
@@ -175,6 +192,7 @@ final class WorkoutViewModel {
         session.exercises.append(workoutExercise)
         currentSession = session
         pruneSkeletons(except: session.exercises.count - 1)
+        syncLiveActivity()
     }
 
     /// Only the exercise you're actively working on should show a ready-to-fill
@@ -230,6 +248,24 @@ final class WorkoutViewModel {
             startRestTimer(exerciseIndex: exerciseIndex, setIndex: setIndex)
         }
         ensureTrailingBlankSet(exerciseIndex: exerciseIndex)
+        syncLiveActivity()
+    }
+
+    /// Marks a set complete (and starts the rest timer) the moment reps are entered,
+    /// so logging a set doesn't need a separate checkmark tap. Only fires forward —
+    /// unlike `toggleSetComplete`, it won't un-complete a set that's already done, so
+    /// re-focusing/blurring a finished set's reps field without changing it is a no-op.
+    func completeSetIfReady(exerciseIndex: Int, setIndex: Int) {
+        guard var session = currentSession,
+              exerciseIndex < session.exercises.count,
+              setIndex < session.exercises[exerciseIndex].sets.count else { return }
+        let set = session.exercises[exerciseIndex].sets[setIndex]
+        guard !set.isCompleted, set.reps > 0 else { return }
+        session.exercises[exerciseIndex].sets[setIndex].isCompleted = true
+        currentSession = session
+        startRestTimer(exerciseIndex: exerciseIndex, setIndex: setIndex)
+        ensureTrailingBlankSet(exerciseIndex: exerciseIndex)
+        syncLiveActivity()
     }
 
     func removeSet(exerciseIndex: Int, setIndex: Int) {
@@ -242,6 +278,7 @@ final class WorkoutViewModel {
         }
         currentSession = session
         ensureTrailingBlankSet(exerciseIndex: exerciseIndex)
+        syncLiveActivity()
     }
 
     /// Keeps exactly one ready-to-fill blank set at the end of an exercise, so the user
@@ -270,6 +307,7 @@ final class WorkoutViewModel {
         guard var session = currentSession else { return }
         session.exercises.remove(at: index)
         currentSession = session
+        syncLiveActivity()
     }
 
     func finishWorkout() async {
@@ -280,6 +318,7 @@ final class WorkoutViewModel {
             try await FirestoreService.shared.saveWorkout(session)
             currentSession = nil
             selectedGym = nil
+            endWorkoutLiveActivity()
             await loadHomeData()
         } catch {
             errorMessage = error.localizedDescription
@@ -290,6 +329,7 @@ final class WorkoutViewModel {
         currentSession = nil
         selectedGym = nil
         dismissRestTimer()
+        endWorkoutLiveActivity()
     }
 
     // MARK: - Rest Timer
@@ -310,8 +350,10 @@ final class WorkoutViewModel {
                 try? await Task.sleep(for: .seconds(target))
                 guard !Task.isCancelled else { return }
                 restTimerDidExpire = true
+                syncLiveActivity()
             }
         }
+        syncLiveActivity()
     }
 
     func dismissRestTimer() {
@@ -323,6 +365,7 @@ final class WorkoutViewModel {
         restTimerDidExpire = false
         expiryTask?.cancel()
         expiryTask = nil
+        syncLiveActivity()
     }
 
     /// Logs how long the just-finished rest period lasted onto the set that follows
@@ -342,5 +385,75 @@ final class WorkoutViewModel {
         let elapsed = Int(Date().timeIntervalSince(startedAt))
         session.exercises[exIndex].sets[setIndex + 1].restSeconds = elapsed
         currentSession = session
+    }
+
+    // MARK: - Live Activity
+
+    private func startWorkoutLiveActivity() {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled,
+              let session = currentSession
+        else { return }
+
+        let attributes = WorkoutActivityAttributes(
+            gymName: session.gymName,
+            workoutStartedAt: session.startedAt
+        )
+        let state = WorkoutActivityAttributes.ContentState(
+            exerciseName: "Getting started",
+            setNumber: 0,
+            lastWeight: nil,
+            lastReps: nil,
+            isResting: false,
+            restMode: .countUp,
+            restStartedAt: nil,
+            restTargetSeconds: restTimerTargetSeconds,
+            restDidExpire: false
+        )
+
+        do {
+            workoutActivity = try Activity.request(
+                attributes: attributes,
+                content: .init(state: state, staleDate: nil),
+                pushType: nil // local-only; no push registration needed for personal use
+            )
+        } catch {
+            workoutActivity = nil // permission denied, activity limit hit, etc. — degrade silently
+        }
+    }
+
+    private func syncLiveActivity() {
+        guard let activity = workoutActivity, let session = currentSession else { return }
+
+        let exIndex = restTimerExerciseIndex ?? (session.exercises.count - 1)
+        guard exIndex >= 0, exIndex < session.exercises.count else { return }
+        let exercise = session.exercises[exIndex]
+        let lastCompleted = exercise.sets.last(where: \.isCompleted)
+
+        let state = WorkoutActivityAttributes.ContentState(
+            exerciseName: exercise.exerciseName,
+            setNumber: lastCompleted?.setNumber ?? exercise.sets.count,
+            lastWeight: lastCompleted?.weight,
+            lastReps: lastCompleted?.reps,
+            isResting: isRestTimerActive,
+            restMode: restTimerMode == .countUp ? .countUp : .countdown,
+            restStartedAt: restTimerStartedAt,
+            restTargetSeconds: restTimerTargetSeconds,
+            restDidExpire: restTimerDidExpire
+        )
+        Task { await activity.update(.init(state: state, staleDate: nil)) }
+    }
+
+    private func endWorkoutLiveActivity() {
+        guard let activity = workoutActivity else { return }
+        workoutActivity = nil
+        Task { await activity.end(nil, dismissalPolicy: .immediate) }
+    }
+
+    private func endOrphanedLiveActivities() {
+        Task {
+            for activity in Activity<WorkoutActivityAttributes>.activities {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+        }
     }
 }
