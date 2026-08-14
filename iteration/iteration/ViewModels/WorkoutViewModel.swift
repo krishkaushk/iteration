@@ -97,7 +97,7 @@ final class WorkoutViewModel {
     }
     var isRestTimerActive: Bool = false
     var restTimerStartedAt: Date?
-    var restTimerMode: RestTimerMode = .countUp {
+    var restTimerMode: RestTimerMode = .countdown {
         didSet { syncLiveActivity() }
     }
     var restTimerTargetSeconds: Int = 180 {
@@ -156,7 +156,8 @@ final class WorkoutViewModel {
                         isCompleted: false,
                         createdAt: Date()
                     )
-                ]
+                ],
+                isDone: false
             )
             newExercises.append(newExercise)
         }
@@ -171,13 +172,24 @@ final class WorkoutViewModel {
     }
 
     func addExercise(_ exercise: Exercise) {
-        guard var session = currentSession else { return }
+        guard let session = currentSession else { return }
+        // Adding a new exercise means you've moved on — automatically finish every
+        // exercise that isn't already Done (strip its skeleton set and mark it Done,
+        // or remove it outright if nothing was ever logged) instead of requiring an
+        // explicit Done tap first. Highest index first: `finishExercise` can remove an
+        // exercise, which shifts every later index down by one, so processing
+        // back-to-front over this snapshot keeps the remaining indices valid.
+        for i in session.exercises.indices.reversed() {
+            finishExercise(at: i)
+        }
+
+        guard var updatedSession = currentSession else { return }
         let workoutExercise = WorkoutExercise(
             id: UUID().uuidString,
             templateId: exercise.id ?? UUID().uuidString,
             exerciseName: exercise.name,
             equipmentType: exercise.equipmentType,
-            orderIndex: session.exercises.count,
+            orderIndex: updatedSession.exercises.count,
             sets: [
                 ExerciseSet(
                     id: UUID().uuidString,
@@ -187,36 +199,27 @@ final class WorkoutViewModel {
                     isCompleted: false,
                     createdAt: Date()
                 )
-            ]
+            ],
+            isDone: false
         )
-        session.exercises.append(workoutExercise)
-        currentSession = session
-        pruneSkeletons(except: session.exercises.count - 1)
+        updatedSession.exercises.append(workoutExercise)
+        currentSession = updatedSession
         syncLiveActivity()
-    }
-
-    /// Only the exercise you're actively working on should show a ready-to-fill
-    /// skeleton set — once you move on to a new exercise, any other exercise's
-    /// untouched trailing blank set goes away instead of lingering as clutter.
-    private func pruneSkeletons(except keepIndex: Int) {
-        guard var session = currentSession else { return }
-        for i in session.exercises.indices where i != keepIndex {
-            if let last = session.exercises[i].sets.last, last.reps == 0, !last.isCompleted {
-                session.exercises[i].sets.removeLast()
-            }
-        }
-        currentSession = session
     }
 
     func addSet(toExerciseAt index: Int) {
         guard var session = currentSession,
               index < session.exercises.count else { return }
         let nextSetNumber = session.exercises[index].sets.count + 1
+        // Carry the previous weight forward (usually the same across sets of one
+        // exercise), but never reps — a fresh set must start blank/0 to actually count
+        // as a skeleton (`isSkeleton` is defined purely by `reps == 0`), otherwise it
+        // renders as if already logged and survives the 0-rep cleanup untouched.
         let newSet = ExerciseSet(
             id: UUID().uuidString,
             setNumber: nextSetNumber,
             weight: session.exercises[index].sets.last?.weight ?? 0,
-            reps: session.exercises[index].sets.last?.reps ?? 0,
+            reps: 0,
             isCompleted: false,
             createdAt: Date()
         )
@@ -277,6 +280,9 @@ final class WorkoutViewModel {
             session.exercises[exerciseIndex].sets[i].setNumber = i + 1
         }
         currentSession = session
+        if restTimerExerciseIndex == exerciseIndex, let timerSetIdx = restTimerSetIndex, setIndex <= timerSetIdx {
+            restTimerSetIndex = timerSetIdx - 1
+        }
         ensureTrailingBlankSet(exerciseIndex: exerciseIndex)
         syncLiveActivity()
     }
@@ -307,13 +313,71 @@ final class WorkoutViewModel {
         guard var session = currentSession else { return }
         session.exercises.remove(at: index)
         currentSession = session
+        adjustRestTimerIndex(afterRemovingExerciseAt: index)
         syncLiveActivity()
+    }
+
+    /// The explicit Done button on an exercise's header — same underlying logic as the
+    /// automatic finish that happens when you add a new exercise (see `addExercise`),
+    /// exposed directly for finishing an exercise without necessarily adding another
+    /// one right after (e.g. the last exercise of a workout, right before Finish).
+    func markExerciseDone(at index: Int) {
+        finishExercise(at: index)
+    }
+
+    /// Marks an exercise finished: strips its untouched trailing skeleton set, and — if
+    /// that leaves it with nothing logged at all — removes the exercise outright rather
+    /// than saving a phantom 0-rep exercise. A rest timer already running for this
+    /// exercise is left alone; once the owning exercise is done, the view renders that
+    /// same timer as a small "break" timer instead of the inline between-set one.
+    /// A no-op if the exercise is already Done, so callers can call it unconditionally.
+    private func finishExercise(at index: Int) {
+        guard var session = currentSession, index < session.exercises.count,
+              !(session.exercises[index].isDone ?? false)
+        else { return }
+        session.exercises[index].sets.removeAll { $0.reps == 0 && !$0.isCompleted }
+        if session.exercises[index].sets.isEmpty {
+            session.exercises.remove(at: index)
+            currentSession = session
+            adjustRestTimerIndex(afterRemovingExerciseAt: index)
+            syncLiveActivity()
+            return
+        }
+        session.exercises[index].isDone = true
+        currentSession = session
+        syncLiveActivity()
+    }
+
+    /// The "Edit" action on an already-done exercise — reopens it for logging more sets.
+    func reopenExercise(at index: Int) {
+        guard var session = currentSession, index < session.exercises.count else { return }
+        session.exercises[index].isDone = false
+        currentSession = session
+        ensureTrailingBlankSet(exerciseIndex: index)
+        syncLiveActivity()
+    }
+
+    /// Removing an exercise shifts every later index down by one, and can orphan the
+    /// rest timer entirely if the removed exercise was the one it belonged to (still
+    /// active, just no longer tied to any particular card — the view renders it as an
+    /// untethered break timer above the bottom bar in that case).
+    private func adjustRestTimerIndex(afterRemovingExerciseAt removedIndex: Int) {
+        guard let timerIdx = restTimerExerciseIndex else { return }
+        if timerIdx == removedIndex {
+            restTimerExerciseIndex = nil
+            restTimerSetIndex = nil
+        } else if timerIdx > removedIndex {
+            restTimerExerciseIndex = timerIdx - 1
+        }
     }
 
     func finishWorkout() async {
         guard var session = currentSession else { return }
         session.endedAt = Date()
         dismissRestTimer()
+        // Safety net: drop any exercise nothing was ever actually logged for, in case
+        // it slipped past the immediate cleanup in `markExerciseDone`/`pruneSkeletons`.
+        session.exercises.removeAll { exercise in !exercise.sets.contains { $0.isCompleted } }
         do {
             try await FirestoreService.shared.saveWorkout(session)
             currentSession = nil
@@ -335,7 +399,7 @@ final class WorkoutViewModel {
     // MARK: - Rest Timer
 
     func startRestTimer(exerciseIndex: Int, setIndex: Int) {
-        finalizeRestTimer()
+        finalizeRestTimer(loggingOnto: exerciseIndex, setIndex: setIndex)
 
         expiryTask?.cancel()
         restTimerDidExpire = false
@@ -357,7 +421,7 @@ final class WorkoutViewModel {
     }
 
     func dismissRestTimer() {
-        finalizeRestTimer()
+        finalizeRestTimer(loggingOnto: nil, setIndex: nil)
         isRestTimerActive = false
         restTimerStartedAt = nil
         restTimerExerciseIndex = nil
@@ -368,23 +432,29 @@ final class WorkoutViewModel {
         syncLiveActivity()
     }
 
-    /// Logs how long the just-finished rest period lasted onto the set that follows
-    /// the one which triggered it — that set is guaranteed to exist because of the
-    /// skeleton invariant (`ensureTrailingBlankSet`). Called both when a new rest
-    /// timer is about to replace this one (moved straight to the next set) and when
-    /// the user explicitly dismisses it.
-    private func finalizeRestTimer() {
+    /// Logs how long the just-finished rest period lasted onto whichever set actually
+    /// ends it. When a new rest timer is about to replace this one (`startRestTimer`
+    /// passes the set that was just completed), that's the target directly — this is
+    /// what lets a "break" timer span into a different exercise correctly, unlike the
+    /// old same-exercise "setIndex + 1" assumption. On an explicit dismiss with no next
+    /// set in hand, it falls back to the trailing blank set of the exercise that was
+    /// resting (guaranteed to exist because of the skeleton invariant).
+    private func finalizeRestTimer(loggingOnto targetExerciseIndex: Int?, setIndex targetSetIndex: Int?) {
         guard isRestTimerActive,
               let startedAt = restTimerStartedAt,
-              let exIndex = restTimerExerciseIndex,
-              let setIndex = restTimerSetIndex,
-              var session = currentSession,
-              exIndex < session.exercises.count,
-              setIndex + 1 < session.exercises[exIndex].sets.count
+              var session = currentSession
         else { return }
         let elapsed = Int(Date().timeIntervalSince(startedAt))
-        session.exercises[exIndex].sets[setIndex + 1].restSeconds = elapsed
-        currentSession = session
+
+        if let exIndex = targetExerciseIndex, let setIndex = targetSetIndex,
+           exIndex < session.exercises.count, setIndex < session.exercises[exIndex].sets.count {
+            session.exercises[exIndex].sets[setIndex].restSeconds = elapsed
+            currentSession = session
+        } else if let exIndex = restTimerExerciseIndex, let setIndex = restTimerSetIndex,
+                  exIndex < session.exercises.count, setIndex + 1 < session.exercises[exIndex].sets.count {
+            session.exercises[exIndex].sets[setIndex + 1].restSeconds = elapsed
+            currentSession = session
+        }
     }
 
     // MARK: - Live Activity

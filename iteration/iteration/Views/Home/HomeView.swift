@@ -5,6 +5,7 @@ struct HomeView: View {
     @Environment(AuthViewModel.self) private var authViewModel
     @Environment(WorkoutViewModel.self) private var workoutVM
     @Environment(\.selectedTab) private var selectedTab
+    @Environment(\.activeBannerHeight) private var activeBannerHeight
 
     var body: some View {
         ScrollView {
@@ -37,7 +38,10 @@ struct HomeView: View {
                 .font(.system(size: 26, weight: .medium))
                 .foregroundStyle(Color.appText)
         }
-        .padding(.top, workoutVM.isActive ? 28 : 16)
+        // Explicit measured banner height, not `.safeAreaInset`'s own reservation
+        // (confirmed unreliable on-device for this dynamically-appearing banner) —
+        // plus a small fixed buffer so it never sits flush against the banner.
+        .padding(.top, 16 + activeBannerHeight)
     }
 
     // MARK: - Session Card

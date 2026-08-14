@@ -3,6 +3,19 @@ import SwiftUI
 struct MainTabView: View {
     @Environment(\.selectedTab) private var selectedTab
     @Environment(WorkoutViewModel.self) private var workoutVM
+    // Driven explicitly via `updateBannerVisibility()` rather than computed inline in
+    // the `.safeAreaInset` closure below — that closure could lag a render behind a
+    // fresh `workoutVM.isActive` flip (e.g. starting a workout while already on the
+    // Workout tab showed the banner until switching tabs away and back forced a
+    // refresh). `.onChange` reliably fires on every actual transition instead.
+    @State private var showBanner = false
+    // Measured directly from the banner's own rendered size — `.safeAreaInset` is
+    // supposed to push sibling scroll content down by exactly this much on its own,
+    // but with dynamically-appearing (and animated) inset content that reservation
+    // doesn't reliably happen — confirmed on-device (Home's greeting rendered flush
+    // against the banner, its date label hidden underneath). Screens read this value
+    // directly and add it as explicit padding instead of trusting the inset alone.
+    @State private var bannerHeight: CGFloat = 0
 
     var body: some View {
         TabView(selection: selectedTab) {
@@ -28,10 +41,29 @@ struct MainTabView: View {
         }
         .tint(Color.appPrimary)
         .preferredColorScheme(.dark)
+        .environment(\.activeBannerHeight, showBanner ? bannerHeight : 0)
         .safeAreaInset(edge: .top) {
-            if workoutVM.isActive && selectedTab.wrappedValue != .workout {
+            if showBanner {
                 activeWorkoutBanner
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear
+                                .onAppear { bannerHeight = geo.size.height }
+                                .onChange(of: geo.size.height) { _, newValue in bannerHeight = newValue }
+                        }
+                    )
             }
+        }
+        .onAppear { updateBannerVisibility() }
+        .onChange(of: workoutVM.isActive) { _, _ in updateBannerVisibility() }
+        .onChange(of: selectedTab.wrappedValue) { _, _ in updateBannerVisibility() }
+    }
+
+    private func updateBannerVisibility() {
+        let shouldShow = workoutVM.isActive && selectedTab.wrappedValue != .workout
+        guard shouldShow != showBanner else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            showBanner = shouldShow
         }
     }
 
@@ -68,7 +100,27 @@ struct MainTabView: View {
             .padding(.horizontal, 12)
             .padding(.top, 4)
             .padding(.bottom, 8)
+            // A visible shadow reads as a distinct floating layer above the tab's own
+            // content — actual non-overlap is enforced explicitly via
+            // `activeBannerHeight` (see below), not assumed from `.safeAreaInset` alone.
+            .shadow(color: .black.opacity(0.35), radius: 10, x: 0, y: 4)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// Real measured height of the active-workout banner (0 when not showing). Screens
+// whose top content needs to visibly clear the banner should add this as explicit
+// top padding rather than relying on `.safeAreaInset` to push them down on its own —
+// confirmed on-device that reservation doesn't reliably happen for this banner, since
+// its appearance is both conditional (`showBanner`) and animated.
+private struct ActiveBannerHeightKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    var activeBannerHeight: CGFloat {
+        get { self[ActiveBannerHeightKey.self] }
+        set { self[ActiveBannerHeightKey.self] = newValue }
     }
 }

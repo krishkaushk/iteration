@@ -19,6 +19,10 @@ struct WorkoutExercise: Codable, Identifiable {
     var variantId: String?
     var orderIndex: Int
     var sets: [ExerciseSet]
+    // Optional (not `= false`), since old Firestore documents don't have this key —
+    // synthesized Decodable throws keyNotFound on a missing key even with a default
+    // value declared, so Optional (decodes to nil) is what actually stays backward-compatible.
+    var isDone: Bool? = nil
 }
 
 struct ExerciseSet: Codable, Identifiable {

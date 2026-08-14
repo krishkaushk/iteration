@@ -244,7 +244,7 @@ TabView: Home | Workout | History | Progress | Profile
 ```
 
 - **Home**: live dashboard — date, greeting, last session CTA card, streak, PRs this month, monthly goal progress bar, week activity blocks, recent workouts list
-- **Workout** (active session): gym picker → exercise list with set rows, add exercise sheet, count-up rest timer overlay, finish confirmation
+- **Workout** (active session): gym picker → exercise list with set rows, add exercise sheet, inline rest timer (countdown by default, toggleable to count-up), per-exercise Done button (auto-triggered when you add the next exercise) that turns a still-running timer into a small "break" timer between exercises, finish confirmation
 - **History**: past sessions list (expandable), repeat workout button
 - **Progress**: strength line chart (exercise picker), weekly volume bar chart (last 12 weeks), body weight log + line chart
 - **Profile**: gym management (add/delete), exercise library sheet, sign out
@@ -275,10 +275,18 @@ get: {
 ```
 
 ### Rest Timer
-Count-up timer in `WorkoutViewModel` using `Task { @MainActor }` with `Task.sleep(for: .seconds(1))`. Starts automatically when a set is marked complete.
+`Date`-based, not a manual counter (`WorkoutViewModel.restTimerStartedAt`, rendered via `Text(_:style: .timer)`) — correct across app backgrounding since it's wall-clock math, not an accumulated tick count. Two modes (`restTimerMode`): **countdown is the default** (target adjustable ±15s, haptic at zero), toggleable to count-up. Starts automatically when a set is marked complete (`completeSetIfReady`/`toggleSetComplete` → `startRestTimer`). Elapsed rest is logged onto whichever set actually ends the rest period (`finalizeRestTimer(loggingOnto:setIndex:)`), not assumed to be "the next set in the same exercise" — that generalization is what lets a timer span across exercises as a break timer (see below).
+
+### Per-Exercise Done + Break Timer
+`WorkoutExercise.isDone: Bool?` (Optional, not a non-optional default — see note below). `WorkoutViewModel.finishExercise(at:)` strips an exercise's untouched skeleton set and marks it Done, or removes the exercise outright if that leaves nothing logged (private; exposed via `markExerciseDone` for the header checkmark button). `addExercise` calls it automatically on every not-yet-done exercise before appending the new one, so moving on to the next exercise doesn't require an explicit Done tap. A rest timer already running when its exercise is marked Done is left alone — `WorkoutView` renders that same timer as a small `breakTimerView` below the (now collapsed) card instead of the inline between-set one, so you can keep resting between exercises without it feeling tied to the exercise you already left. `reopenExercise(at:)` is the "Edit" action that un-does Done for further logging.
+
+**Optional, not `Bool = false`, on Firestore-backed model fields added after initial ship**: `WorkoutExercise` has no custom `init(from:)`, so Swift's synthesized `Decodable` throws `keyNotFound` on old documents missing a new key even when a default value is declared on the struct — defaults only apply to the memberwise initializer, not decoding. Making a newly-added field `Bool?` (nil on old docs) is what actually stays backward-compatible; treat as `field ?? false` everywhere it's read.
 
 ### Tab Switching
-Custom `EnvironmentKey` holding `Binding<AppTab>`. Inject at root, read with `@Environment(\.selectedTab)`, switch with `selectedTab.wrappedValue = .history`.
+Custom `EnvironmentKey` holding `Binding<AppTab>`. Inject at root, read with `@Environment(\.selectedTab)`, switch with `selectedTab.wrappedValue = .history`. Same pattern reused for `\.activeBannerHeight` (`MainTabView.swift`) — see the `.safeAreaInset` gotcha below.
+
+### `.safeAreaInset` Doesn't Reliably Push Sibling Content When Dynamic/Animated
+`MainTabView`'s active-workout banner uses `.safeAreaInset(edge: .top)`, which is supposed to reserve its own space so sibling scroll content never overlaps it — but confirmed on-device that this reservation doesn't reliably happen once the inset's content appears/disappears conditionally (`@State` driven) and is wrapped in `withAnimation`: `HomeView`'s greeting rendered flush against the banner with its date label hidden underneath, as if no space had been reserved at all. Fix used: don't trust the inset's automatic reservation — measure the banner's real height directly (`GeometryReader` in `MainTabView`), expose it via the `\.activeBannerHeight` environment value, and have dependent screens add it as explicit `.padding(.top:)`. Only `HomeView` has been fixed this way so far; `HistoryView`/`ProgressTabView`/`ProfileView` use `NavigationStack` with their own nav bar title and haven't shown evidence of the same issue.
 
 ### Init Order (Firebase)
 `FirebaseApp.configure()` must run before any `AuthViewModel` init. Pattern:

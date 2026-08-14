@@ -12,6 +12,7 @@ struct WorkoutView: View {
     @State private var keyboardCancelTrigger = 0
     @State private var manualExpansionOverrides: [String: Bool] = [:]
     @State private var focusedWeightFieldIDs: Set<String> = []
+    @State private var scrollViewportHeight: CGFloat = 0
 
     private var hasPendingCompletion: Bool {
         guard let session = workoutVM.currentSession else { return false }
@@ -34,13 +35,34 @@ struct WorkoutView: View {
                     startView
                 }
             }
-            .navigationTitle(workoutVM.isActive ? "Workout" : "")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
             // Keep the bottom bar pinned at the true bottom of the screen instead of
             // sliding up above the keyboard along with the rest of the layout.
             .ignoresSafeArea(.keyboard, edges: .bottom)
             .toolbar {
+                // Elapsed workout time, built directly into the nav bar title area —
+                // no separate floating banner (that's reserved for other tabs; see
+                // MainTabView) — so it reads as native chrome, not an overlay card.
+                ToolbarItem(placement: .principal) {
+                    if workoutVM.isActive, let startedAt = workoutVM.currentSession?.startedAt {
+                        VStack(spacing: 0) {
+                            Text("Workout")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(Color.appText)
+                            Text(startedAt, style: .timer)
+                                .font(.system(size: 11, weight: .medium))
+                                .monospacedDigit()
+                                .foregroundStyle(Color.appMuted)
+                        }
+                    } else {
+                        Text("Workout")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Color.appText)
+                    }
+                }
+
                 // decimalPad/numberPad have no Return key, so there's otherwise no other
                 // way to signal "done typing" — one Done button, shared by every field.
                 ToolbarItemGroup(placement: .keyboard) {
@@ -133,47 +155,98 @@ struct WorkoutView: View {
                 .padding(.top, 8)
             }
 
-            ScrollView {
-                LazyVStack(spacing: 16) {
-                    ForEach(Array(workoutVM.currentSession!.exercises.enumerated()), id: \.element.id) { exIndex, exercise in
-                        exerciseCard(exercise, at: exIndex)
-                            .opacity(dimAmount(for: exIndex))
-                            .saturation(dimAmount(for: exIndex))
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    LazyVStack(spacing: 16) {
+                        ForEach(Array(workoutVM.currentSession!.exercises.enumerated()), id: \.element.id) { exIndex, exercise in
+                            exerciseCard(exercise, at: exIndex)
+                                .id(exercise.id)
+                                .opacity(dimAmount(for: exIndex))
+                                .saturation(dimAmount(for: exIndex))
+
+                            if (exercise.isDone ?? false), workoutVM.isRestTimerActive,
+                               workoutVM.restTimerExerciseIndex == exIndex {
+                                breakTimerView
+                            }
+                        }
+
+                        if workoutVM.isRestTimerActive, workoutVM.restTimerExerciseIndex == nil {
+                            breakTimerView
+                        }
+
+                        // Room below the last card so the current exercise can always be
+                        // scrolled all the way up to the top of the screen, even when
+                        // it's the last (or only) card and there isn't naturally enough
+                        // content below it to scroll that far.
+                        Color.clear
+                            .frame(height: scrollViewportHeight)
+                            .allowsHitTesting(false)
+                    }
+                    .padding(20)
+                    .animation(.easeInOut(duration: 0.3), value: workoutVM.isRestTimerActive)
+                    .animation(.easeInOut(duration: 0.25), value: manualExpansionOverrides)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        keyboardDismissTrigger += 1
                     }
                 }
-                .padding(20)
-                .animation(.easeInOut(duration: 0.3), value: workoutVM.isRestTimerActive)
-                .animation(.easeInOut(duration: 0.25), value: manualExpansionOverrides)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    keyboardDismissTrigger += 1
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { scrollViewportHeight = geo.size.height }
+                            .onChange(of: geo.size.height) { _, newValue in scrollViewportHeight = newValue }
+                    }
+                )
+                .scrollDismissesKeyboard(.immediately)
+                // Keep the exercise you're currently on pinned at the top as the list
+                // grows — otherwise it's easy to lose track of the active card (and its
+                // rest/break timer) below a long scroll of already-finished exercises.
+                .onChange(of: workoutVM.currentSession?.exercises.count) { _, _ in
+                    scrollToCurrentExercise(scrollProxy)
                 }
             }
-            .scrollDismissesKeyboard(.immediately)
 
             bottomBar
         }
     }
 
+    private func scrollToCurrentExercise(_ proxy: ScrollViewProxy) {
+        guard let currentID = workoutVM.currentSession?.exercises.last?.id else { return }
+        withAnimation(.easeInOut(duration: 0.3)) {
+            proxy.scrollTo(currentID, anchor: .top)
+        }
+    }
+
     // MARK: - Exercise Card
 
+    // Only dim other cards while an active (not-yet-done) exercise is mid-rest — once
+    // that exercise is marked Done, its timer becomes a break timer and nothing should
+    // look disabled, including whatever new exercise you're currently adding.
     private func dimAmount(for exIndex: Int) -> Double {
-        guard workoutVM.isRestTimerActive, workoutVM.restTimerExerciseIndex != exIndex else { return 1 }
-        return 0.4
+        guard workoutVM.isRestTimerActive,
+              let timerIdx = workoutVM.restTimerExerciseIndex,
+              let exercises = workoutVM.currentSession?.exercises,
+              timerIdx < exercises.count,
+              !(exercises[timerIdx].isDone ?? false)
+        else { return 1 }
+        return exIndex == timerIdx ? 1 : 0.4
     }
 
     // Only the most-recently-added exercise is expanded by default — everything
-    // else collapses to a compact summary until tapped. An exercise currently
-    // resting always stays expanded regardless of that default or any manual
-    // override, since collapsing it mid-rest would hide the timer/Done button.
+    // else collapses to a compact summary until tapped. An exercise currently resting
+    // stays expanded regardless of that default or any manual override, since
+    // collapsing it mid-rest would hide the timer — but only while it's not yet Done;
+    // a Done exercise's timer renders separately as the break timer, so it's free to
+    // collapse like normal.
     private func isExpanded(exercise: WorkoutExercise, at exIndex: Int, totalCount: Int) -> Bool {
-        if workoutVM.isRestTimerActive && workoutVM.restTimerExerciseIndex == exIndex {
+        let isDone = exercise.isDone ?? false
+        if !isDone, workoutVM.isRestTimerActive, workoutVM.restTimerExerciseIndex == exIndex {
             return true
         }
         if let override = manualExpansionOverrides[exercise.id] {
             return override
         }
-        return exIndex == totalCount - 1
+        return !isDone && exIndex == totalCount - 1
     }
 
     private func toggleExpanded(exercise: WorkoutExercise, at exIndex: Int, totalCount: Int) {
@@ -187,7 +260,11 @@ struct WorkoutView: View {
     }
 
     private func exerciseCard(_ exercise: WorkoutExercise, at exIndex: Int) -> some View {
-        let isTimerHere = workoutVM.isRestTimerActive && workoutVM.restTimerExerciseIndex == exIndex
+        let isDone = exercise.isDone ?? false
+        // A Done exercise never renders its own inline timer — once it's Done, a
+        // still-running timer for it becomes the small break timer instead (rendered
+        // by the caller, below this card).
+        let isTimerHere = !isDone && workoutVM.isRestTimerActive && workoutVM.restTimerExerciseIndex == exIndex
         let totalCount = workoutVM.currentSession?.exercises.count ?? 0
         let expanded = isExpanded(exercise: exercise, at: exIndex, totalCount: totalCount)
 
@@ -211,6 +288,31 @@ struct WorkoutView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.appMuted)
                     .rotationEffect(.degrees(expanded ? 0 : -90))
+
+                if isDone {
+                    if expanded {
+                        Button {
+                            workoutVM.reopenExercise(at: exIndex)
+                        } label: {
+                            Text("Edit")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.appAccent)
+                        }
+                    }
+                } else {
+                    Button {
+                        workoutVM.markExerciseDone(at: exIndex)
+                        manualExpansionOverrides[exercise.id] = false
+                    } label: {
+                        // Unchecked (outline) until actually marked done — matches the
+                        // same circle → checkmark.circle.fill convention as the per-set
+                        // completion toggle, rather than looking pre-checked.
+                        Image(systemName: "circle")
+                            .font(.system(size: 22))
+                            .foregroundStyle(Color.appMuted)
+                    }
+                    .frame(width: 44)
+                }
 
                 Button {
                     workoutVM.removeExercise(at: exIndex)
@@ -247,26 +349,36 @@ struct WorkoutView: View {
                         restAccumulatedLabel(restSeconds)
                     }
 
-                    setRow(exerciseSet, exerciseIndex: exIndex, setIndex: setIndex)
+                    setRow(exerciseSet, exerciseIndex: exIndex, setIndex: setIndex, isLocked: isDone)
 
-                    // Sits between the set that was just completed and the fresh blank
-                    // set behind it — not a floating overlay competing for attention.
-                    if isTimerHere && setIndex == exercise.sets.count - 2 {
+                    // Anchored to the exact set that started the timer, not a distance-
+                    // from-the-end guess — so it stays put right after that set no
+                    // matter how many more rows get added below it afterward.
+                    if isTimerHere && setIndex == workoutVM.restTimerSetIndex {
                         inlineRestTimer
                     }
                 }
 
-                Button {
-                    workoutVM.addSet(toExerciseAt: exIndex)
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 12))
-                        Text("Add set")
-                            .font(.system(size: 13, weight: .medium))
+                if !isDone {
+                    Button {
+                        if let last = exercise.sets.last, last.reps == 0, !last.isCompleted,
+                           !focusedWeightFieldIDs.contains(last.id) {
+                            // An untouched skeleton row is already waiting — "ungrey" it
+                            // instead of piling on a second blank row underneath it.
+                            focusedWeightFieldIDs.insert(last.id)
+                        } else {
+                            workoutVM.addSet(toExerciseAt: exIndex)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 12))
+                            Text("Add set")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .foregroundStyle(Color.appPrimary)
+                        .padding(.top, 4)
                     }
-                    .foregroundStyle(Color.appPrimary)
-                    .padding(.top, 4)
                 }
             }
         }
@@ -296,7 +408,7 @@ struct WorkoutView: View {
 
     // MARK: - Set Row
 
-    private func setRow(_ exerciseSet: ExerciseSet, exerciseIndex: Int, setIndex: Int) -> some View {
+    private func setRow(_ exerciseSet: ExerciseSet, exerciseIndex: Int, setIndex: Int, isLocked: Bool = false) -> some View {
         let isSkeleton = exerciseSet.reps == 0 && !exerciseSet.isCompleted
         // Grey out the carried-over weight number only until this specific field has
         // been tapped into at least once — tapping "confirms" it even before typing.
@@ -326,6 +438,7 @@ struct WorkoutView: View {
                 dismissTrigger: keyboardDismissTrigger,
                 cancelTrigger: keyboardCancelTrigger
             )
+            .disabled(isLocked)
             .font(.system(size: 16, weight: .medium))
             .foregroundStyle(weightUntouched ? Color.appMuted : Color.appText)
             .padding(.vertical, 8)
@@ -359,6 +472,7 @@ struct WorkoutView: View {
                 dismissTrigger: keyboardDismissTrigger,
                 cancelTrigger: keyboardCancelTrigger
             )
+            .disabled(isLocked)
             .font(.system(size: 16, weight: .medium))
             .foregroundStyle(Color.appText)
             .padding(.vertical, 8)
@@ -379,7 +493,7 @@ struct WorkoutView: View {
                     .foregroundStyle(exerciseSet.isCompleted ? Color.appAccent : (isSkeleton ? Color.appBorder : Color.appMuted))
             }
             .frame(width: 44)
-            .disabled(isSkeleton)
+            .disabled(isSkeleton || isLocked)
 
             Button {
                 guard let session = workoutVM.currentSession,
@@ -393,6 +507,7 @@ struct WorkoutView: View {
                     .foregroundStyle(Color.appMuted)
             }
             .frame(width: 28)
+            .disabled(isLocked)
         }
     }
 
@@ -538,6 +653,70 @@ struct WorkoutView: View {
         .padding(16)
         .background(Color.appCardMaroon)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .sensoryFeedback(.impact, trigger: workoutVM.restTimerDidExpire) { _, isExpired in isExpired }
+        .transition(.scale(scale: 0.95).combined(with: .opacity))
+    }
+
+    // MARK: - Break Timer (between exercises)
+
+    // A rest timer that's still running once its owning exercise is marked Done keeps
+    // going as this small "break" timer — same underlying countUp/countdown state as
+    // `inlineRestTimer`, just compact and detached from any one exercise's set rows,
+    // since the exercise it started on may already be collapsed (or gone entirely, if
+    // it was cleaned up for having nothing logged).
+    private var breakTimerView: some View {
+        let startedAt = workoutVM.restTimerStartedAt ?? Date()
+        let displayDate: Date = workoutVM.restTimerMode == .countUp
+            ? startedAt
+            : startedAt.addingTimeInterval(TimeInterval(workoutVM.restTimerTargetSeconds))
+        let timedOut = workoutVM.restTimerMode == .countdown && workoutVM.restTimerDidExpire
+
+        return HStack(spacing: 10) {
+            Image(systemName: "timer")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.appAccent)
+
+            Text(timedOut ? "TIME'S UP" : "BREAK")
+                .font(.system(size: 10, weight: .medium))
+                .tracking(1)
+                .foregroundStyle(Color.appAccent)
+
+            Text(displayDate, style: .timer)
+                .font(.system(size: 15, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(Color.appText)
+
+            Spacer()
+
+            Button {
+                workoutVM.restTimerMode = workoutVM.restTimerMode == .countUp ? .countdown : .countUp
+                workoutVM.restTimerDidExpire = false
+            } label: {
+                Text(workoutVM.restTimerMode == .countUp ? "COUNT UP" : "COUNTDOWN")
+                    .font(.system(size: 9, weight: .semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.appBorder)
+                    .foregroundStyle(Color.appMuted)
+                    .clipShape(Capsule())
+            }
+
+            Button {
+                workoutVM.dismissRestTimer()
+            } label: {
+                Text("DONE")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.appMuted)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.appSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.appAccent.opacity(0.3), lineWidth: 1)
+        )
         .sensoryFeedback(.impact, trigger: workoutVM.restTimerDidExpire) { _, isExpired in isExpired }
         .transition(.scale(scale: 0.95).combined(with: .opacity))
     }
